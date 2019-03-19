@@ -50,13 +50,13 @@ struct stCoEpoll_t;
 
 struct stCoRoutineEnv_t
 {
-	stCoRoutine_t *pCallStack[ 128 ];
-	int iCallStackSize;
+	stCoRoutine_t *pCallStack[ 128 ]; // 协程调用栈（最多128个协程，每个线程拥有一个）
+	int iCallStackSize; // 栈中当前的协程数
 	stCoEpoll_t *pEpoll;
 
 	//for copy stack log lastco and nextco
-	stCoRoutine_t* pending_co;
-	stCoRoutine_t* occupy_co;
+	stCoRoutine_t* pending_co; //调用co_swap时，用于记录待恢复的协程
+	stCoRoutine_t* occupy_co; // 调用co_swap时，用于记录正在占用着共享栈的协程
 };
 //int socket(int domain, int type, int protocol);
 void co_log_err( const char *fmt,... )
@@ -235,6 +235,9 @@ void inline PopHead( TLink*apLink )
 	}
 }
 
+/**
+ * 该函数的输入两个链表，把第二个链表挂到第一个链表上，合并成一个链表
+ * **/
 template <class TNode,class TLink>
 void inline Join( TLink*apLink,TLink *apOther )
 {
@@ -320,7 +323,7 @@ struct stCoEpoll_t
 
 	struct stTimeoutItemLink_t *pstActiveList;
 
-	co_epoll_res *result; 
+	co_epoll_res *result; // 该结构体用于存储epoll_wait的结果
 
 };
 typedef void (*OnPreparePfn_t)( stTimeoutItem_t *,struct epoll_event &ev, stTimeoutItemLink_t *active );
@@ -334,15 +337,15 @@ struct stTimeoutItem_t
 	};
 	stTimeoutItem_t *pPrev;
 	stTimeoutItem_t *pNext;
-	stTimeoutItemLink_t *pLink;
+	stTimeoutItemLink_t *pLink; // 指向其所属的链表
 
-	unsigned long long ullExpireTime;
+	unsigned long long ullExpireTime; // 毫秒，表示未来超时的时刻
 
 	OnPreparePfn_t pfnPrepare;
 	OnProcessPfn_t pfnProcess;
 
 	void *pArg; // routine 
-	bool bTimeout;
+	bool bTimeout; // 表示是否超时
 };
 struct stTimeoutItemLink_t
 {
@@ -352,10 +355,10 @@ struct stTimeoutItemLink_t
 };
 struct stTimeout_t
 {
-	stTimeoutItemLink_t *pItems;
-	int iItemSize;
+	stTimeoutItemLink_t *pItems; // 指向数组，每个元素是一个链表，每个链表存储超时时间相同的stTimeoutItem_t
+	int iItemSize; // 表示数组的大小，在AllocTimeout函数中设为60*1000
 
-	unsigned long long ullStart;
+	unsigned long long ullStart; // 一个时刻单位毫秒，用途？
 	long long llStartIdx;
 };
 stTimeout_t *AllocTimeout( int iSize )
@@ -396,9 +399,9 @@ int AddTimeout( stTimeout_t *apTimeout,stTimeoutItem_t *apItem ,unsigned long lo
 
 		return __LINE__;
 	}
-	unsigned long long diff = apItem->ullExpireTime - apTimeout->ullStart;
+	unsigned long long diff = apItem->ullExpireTime - apTimeout->ullStart; // 算出来的就是timeout，毫秒
 
-	if( diff >= (unsigned long long)apTimeout->iItemSize )
+	if( diff >= (unsigned long long)apTimeout->iItemSize ) // 强制diff不超过60s
 	{
 		diff = apTimeout->iItemSize - 1;
 		co_log_err("CO_ERR: AddTimeout line %d diff %d",
@@ -406,6 +409,7 @@ int AddTimeout( stTimeout_t *apTimeout,stTimeoutItem_t *apItem ,unsigned long lo
 
 		//return __LINE__;
 	}
+	// 根据stTimeoutItem_t的timeout时间，把其添加到对应的链表
 	AddTail( apTimeout->pItems + ( apTimeout->llStartIdx + diff ) % apTimeout->iItemSize , apItem );
 
 	return 0;
@@ -520,9 +524,10 @@ struct stCoRoutine_t *co_create_env( stCoRoutineEnv_t * env, const stCoRoutineAt
 
 int co_create( stCoRoutine_t **ppco,const stCoRoutineAttr_t *attr,pfn_co_routine_t pfn,void *arg )
 {
+	// 初始化协程环境
 	if( !co_get_curr_thread_env() ) 
 	{
-		co_init_curr_thread_env();
+		co_init_curr_thread_env(); // 初始化协程环境，并创建主协程（有协程栈）
 	}
 	stCoRoutine_t *co = co_create_env( co_get_curr_thread_env(), attr, pfn,arg );
 	*ppco = co;
@@ -548,13 +553,13 @@ void co_resume( stCoRoutine_t *co )
 {
 	stCoRoutineEnv_t *env = co->env;
 	stCoRoutine_t *lpCurrRoutine = env->pCallStack[ env->iCallStackSize - 1 ];
-	if( !co->cStart )
+	if( !co->cStart ) // 如果没有开始运行该协程
 	{
-		coctx_make( &co->ctx,(coctx_pfn_t)CoRoutineFunc,co,0 );
+		coctx_make( &co->ctx,(coctx_pfn_t)CoRoutineFunc,co,0 );// 就初始化该协程栈的上下文
 		co->cStart = 1;
 	}
-	env->pCallStack[ env->iCallStackSize++ ] = co;
-	co_swap( lpCurrRoutine, co );
+	env->pCallStack[ env->iCallStackSize++ ] = co; // 添加待resume的协程到调用栈
+	co_swap( lpCurrRoutine, co ); // 当前协程（主协程）和待resume的协程交换上下文，切换运行栈
 
 
 }
@@ -598,11 +603,24 @@ void save_stack_buffer(stCoRoutine_t* occupy_co)
 
 void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co)
 {
+	// 通过gdb调试各个local变量的位置，发现从高地址到低地址依次是：
+	// rbp
+	// rbp-0x08: unknown
+	// rbp-0x10: update_pending_co 8Byte
+	// rbp-0x18: update_occupy_co 8Byte
+	// rbp-0x20: curr_env 8Byte
+	// rbp-0x28: occupy_co(else语句块中) 8Byte
+	// rbp-0x30: env 8Byte
+	// rbp-0x31: c 1Byte
+	// rbp-0x40: unknown // 应该是
+	// rbp-0x48: curr 8Byte
+	// rbp-0x50: pending_co 8Byte 也是rsp 指向的地址
+	// 因为coctx_swap之后，没有用到curr和pending_co，所以只需要存储从栈底到地址&c就可以了。
  	stCoRoutineEnv_t* env = co_get_curr_thread_env();
 
 	//get curr stack sp
 	char c;
-	curr->stack_sp= &c;
+	curr->stack_sp= &c; // 因此把c作为栈顶可以接着
 
 	if (!pending_co->cIsShareStack)
 	{
@@ -611,13 +629,13 @@ void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co)
 	}
 	else 
 	{
-		env->pending_co = pending_co;
+		env->pending_co = pending_co; // ? 表示待resume的栈，因为切换协程上下文后，pending_co的值会丢失，因此就采用把它记录到env中。
 		//get last occupy co on the same stack mem
 		stCoRoutine_t* occupy_co = pending_co->stack_mem->occupy_co;
 		//set pending co to occupy thest stack mem;
 		pending_co->stack_mem->occupy_co = pending_co;
 
-		env->occupy_co = occupy_co;
+		env->occupy_co = occupy_co; // ?
 		if (occupy_co && occupy_co != pending_co)
 		{
 			save_stack_buffer(occupy_co);
@@ -625,12 +643,12 @@ void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co)
 	}
 
 	//swap context
-	coctx_swap(&(curr->ctx),&(pending_co->ctx) );
+	coctx_swap(&(curr->ctx),&(pending_co->ctx) ); // 把当前栈的信息保存到ctx里面，然后把pending的协程的上下文恢复
 
 	//stack buffer may be overwrite, so get again;
 	stCoRoutineEnv_t* curr_env = co_get_curr_thread_env();
-	stCoRoutine_t* update_occupy_co =  curr_env->occupy_co;
-	stCoRoutine_t* update_pending_co = curr_env->pending_co;
+	stCoRoutine_t* update_occupy_co =  curr_env->occupy_co; // 正在占用的栈空间
+	stCoRoutine_t* update_pending_co = curr_env->pending_co; // 待恢复的栈空间
 	
 	if (update_occupy_co && update_pending_co && update_occupy_co != update_pending_co)
 	{
@@ -647,14 +665,16 @@ void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co)
 //int poll(struct pollfd fds[], nfds_t nfds, int timeout);
 // { fd,events,revents }
 struct stPollItem_t ;
+
+// co_poll_inner 中使用的结构体
 struct stPoll_t : public stTimeoutItem_t 
 {
-	struct pollfd *fds;
-	nfds_t nfds; // typedef unsigned long int nfds_t;
+	struct pollfd *fds; // 指向数组
+	nfds_t nfds; // 表示fds的长度，typedef unsigned long int nfds_t;
 
-	stPollItem_t *pPollItems;
+	stPollItem_t *pPollItems; // 指向数组，长度同样是nfds，其中保存有events。同时stPollItem_t也是链表的node
 
-	int iAllEventDetach;
+	int iAllEventDetach; //
 
 	int iEpollFd;
 
@@ -664,7 +684,7 @@ struct stPoll_t : public stTimeoutItem_t
 };
 struct stPollItem_t : public stTimeoutItem_t
 {
-	struct pollfd *pSelf;
+	struct pollfd *pSelf; // 指向
 	stPoll_t *pPoll;
 
 	struct epoll_event stEvent;
@@ -701,7 +721,7 @@ static short EpollEvent2Poll( uint32_t events )
 	return e;
 }
 
-static __thread stCoRoutineEnv_t* gCoEnvPerThread = NULL;
+static __thread stCoRoutineEnv_t* gCoEnvPerThread = NULL; // 当前线程的协程环境
 
 void co_init_curr_thread_env()
 {
@@ -709,7 +729,7 @@ void co_init_curr_thread_env()
 	stCoRoutineEnv_t *env = gCoEnvPerThread;
 
 	env->iCallStackSize = 0;
-	struct stCoRoutine_t *self = co_create_env( env, NULL, NULL,NULL );
+	struct stCoRoutine_t *self = co_create_env( env, NULL, NULL,NULL ); // 创建主协程，主协程的ctx是空的
 	self->cIsMain = 1;
 
 	env->pending_co = NULL;
@@ -753,10 +773,13 @@ void OnPollPreparePfn( stTimeoutItem_t * ap,struct epoll_event &e,stTimeoutItemL
 	}
 }
 
-
+/**
+ * 该函数循环执行epoll_wait，把活跃的fd以及超时的fd找出，然后执行对应的回调函数。
+ * 参数pfn是函数指针，参数arg是函数pfn的参数。函数pfn在每次epoll_wait执行完后都会执行一遍，如果pfn的返回值为-1，那么co_eventloop或退出循环。
+ * **/
 void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 {
-	if( !ctx->result )
+	if( !ctx->result ) // 第一次调用co_eventloop时，才初始化result
 	{
 		ctx->result =  co_epoll_res_alloc( stCoEpoll_t::_EPOLL_SIZE );
 	}
@@ -770,10 +793,11 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 		stTimeoutItemLink_t *active = (ctx->pstActiveList);
 		stTimeoutItemLink_t *timeout = (ctx->pstTimeoutList);
 
-		memset( timeout,0,sizeof(stTimeoutItemLink_t) );
+		memset( timeout,0,sizeof(stTimeoutItemLink_t) ); //
 
 		for(int i=0;i<ret;i++)
 		{
+		    // ptr 指向co_epoll_in中的stPoll_t中对应的pPollItems[i]
 			stTimeoutItem_t *item = (stTimeoutItem_t*)result->events[i].data.ptr;
 			if( item->pfnPrepare )
 			{
@@ -787,6 +811,8 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 
 
 		unsigned long long now = GetTickMS();
+		// stCoEpoll_t中的stTimeout_t结构体存储了epoll监听的所有的描述符的超时信息
+		// 下面这个函数把所有的超时的stTimeoutItem_t结构体（链表节点）存储到stCoEpoll_t的pstTimeoutList链表中
 		TakeAllTimeout( ctx->pTimeout,now,timeout );
 
 		stTimeoutItem_t *lp = timeout->head;
@@ -799,15 +825,16 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 
 		Join<stTimeoutItem_t,stTimeoutItemLink_t>( active,timeout );
 
+		// 遍历active链表，其中有因超时添进去的，也有因活跃添进去的。
 		lp = active->head;
 		while( lp )
 		{
 
 			PopHead<stTimeoutItem_t,stTimeoutItemLink_t>( active );
-            if (lp->bTimeout && now < lp->ullExpireTime) 
+            if (lp->bTimeout && now < lp->ullExpireTime) // 超时，并且
 			{
-				int ret = AddTimeout(ctx->pTimeout, lp, now);
-				if (!ret) 
+				int ret = AddTimeout(ctx->pTimeout, lp, now); // 把在active链表中，但是标记为超时，并没有真正超时的节点重新放回pTimeout
+				if (!ret) // 放回成功
 				{
 					lp->bTimeout = false;
 					lp = active->head;
@@ -821,6 +848,7 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 
 			lp = active->head;
 		}
+
 		if( pfn )
 		{
 			if( -1 == pfn( arg ) )
@@ -878,6 +906,11 @@ stCoRoutine_t *GetCurrThreadCo( )
 
 
 typedef int (*poll_pfn_t)(struct pollfd fds[], nfds_t nfds, int timeout);
+
+
+/**
+ * 在hook的poll中会调用
+ * **/
 int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeout, poll_pfn_t pollfunc)
 {
     if (timeout == 0)
@@ -900,9 +933,9 @@ int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeou
 	arg.nfds = nfds;
 
 	stPollItem_t arr[2];
-	if( nfds < sizeof(arr) / sizeof(arr[0]) && !self->cIsShareStack)
+	if( nfds < sizeof(arr) / sizeof(arr[0]) && !self->cIsShareStack) // if(nfds == 1 && 非共享栈)
 	{
-		arg.pPollItems = arr;
+		arg.pPollItems = arr; // 类似于fds ？
 	}	
 	else
 	{
@@ -914,7 +947,7 @@ int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeou
 	arg.pArg = GetCurrCo( co_get_curr_thread_env() );
 	
 	
-	//2. add epoll
+	//2. add epoll，基本上是配置arg.pPollItems的各个值
 	for(nfds_t i=0;i<nfds;i++)
 	{
 		arg.pPollItems[i].pSelf = arg.fds + i;
@@ -946,9 +979,9 @@ int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeou
 
 	//3.add timeout
 
-	unsigned long long now = GetTickMS();
+	unsigned long long now = GetTickMS(); // 获得当前时间，单位毫秒
 	arg.ullExpireTime = now + timeout;
-	int ret = AddTimeout( ctx->pTimeout,&arg,now );
+	int ret = AddTimeout( ctx->pTimeout,&arg,now ); // 把本次用到的stPoll_t添加到stCoEpoll_t的stTimeout_t对象中
 	int iRaiseCnt = 0;
 	if( ret != 0 )
 	{
@@ -960,13 +993,14 @@ int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeou
 	}
     else
 	{
-		co_yield_env( co_get_curr_thread_env() );
+		co_yield_env( co_get_curr_thread_env() ); // 挂起协程，运行上一个协程，什么时候唤醒？
 		iRaiseCnt = arg.iRaiseCnt;
 	}
 
     {
 		//clear epoll status and memory
-		RemoveFromLink<stTimeoutItem_t,stTimeoutItemLink_t>( &arg );
+		RemoveFromLink<stTimeoutItem_t,stTimeoutItemLink_t>( &arg ); // 把stPoll_t对象从stCoEpoll_t的stTimeout_t对象的某个链表中移除
+		// 把本次关心的fd从epoll中移除，并且把epoll_wait的结果取出来存到fds中
 		for(nfds_t i = 0;i < nfds;i++)
 		{
 			int fd = fds[i].fd;
@@ -974,7 +1008,7 @@ int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeou
 			{
 				co_epoll_ctl( epfd,EPOLL_CTL_DEL,fd,&arg.pPollItems[i].stEvent );
 			}
-			fds[i].revents = arg.fds[i].revents;
+			fds[i].revents = arg.fds[i].revents; // ? 是否缺乏转换？
 		}
 
 
@@ -1054,7 +1088,7 @@ bool co_is_enable_sys_hook()
 	return ( co && co->cEnableSysHook );
 }
 
-stCoRoutine_t *co_self()
+stCoRoutine_t *co_self() // 返回最外层的协程，应该是调用此函数的协程本身
 {
 	return GetCurrThreadCo();
 }

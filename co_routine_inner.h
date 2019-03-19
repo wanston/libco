@@ -29,46 +29,47 @@ struct stCoSpec_t
 
 struct stStackMem_t
 {
-	stCoRoutine_t* occupy_co;
+	stCoRoutine_t* occupy_co; // 指向正在占用此栈的协程
 	int stack_size;
 	char* stack_bp; //stack_buffer + stack_size
-	char* stack_buffer;
+	char* stack_buffer; // 指向堆上的地址
 
 };
 
 struct stShareStack_t
 {
-	unsigned int alloc_idx;
-	int stack_size;
-	int count;
-	stStackMem_t** stack_array;
+	unsigned int alloc_idx; // 一个计数，表示分配共享栈的次数
+	int stack_size; // 需求的栈大小
+	int count; // 协程栈的数目
+	stStackMem_t** stack_array; // 所有的协程栈
 };
 
 
 
 struct stCoRoutine_t
 {
-	stCoRoutineEnv_t *env;
-	pfn_co_routine_t pfn;
-	void *arg;
-	coctx_t ctx;
+	stCoRoutineEnv_t *env; // 环境，每个线程一份
+	pfn_co_routine_t pfn; // 协程函数
+	void *arg; // 函数参数
+	coctx_t ctx; // 协程上下文
 
-	char cStart;
-	char cEnd;
-	char cIsMain;
+	char cStart; // 是否已经开始执行协程函数
+	char cEnd; // 是否已经结束执行协程函数
+	char cIsMain; // 是否为主协程
 	char cEnableSysHook;
 	char cIsShareStack;
 
 	void *pvEnv;
 
 	//char sRunStack[ 1024 * 128 ];
-	stStackMem_t* stack_mem;
+	stStackMem_t* stack_mem; // 指向协程栈，在调用co_create_env时被赋值。
+	// 其来源有两种，要么是由co_alloc_stackmem()从堆上分配；要么是由co_get_stackmem()从现有的协程栈中取一个作为共享栈。
 
 
 	//save satck buffer while confilct on same stack_buffer;
-	char* stack_sp; 
+	char* stack_sp; // 在co_swap中使用，用于记录栈顶，从而可以确定要保存的栈的大小
 	unsigned int save_size;
-	char* save_buffer;
+	char* save_buffer; // 保存的栈的内容
 
 	stCoSpec_t aSpec[1024];
 

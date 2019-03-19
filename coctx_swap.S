@@ -54,14 +54,15 @@ coctx_swap:
 	ret
 
 #elif defined(__x86_64__)
-	leaq 8(%rsp),%rax
-	leaq 112(%rdi),%rsp
+
+	leaq 8(%rsp),%rax  // 地址传送指令，将存储器操作数的地址保存到rax寄存器中。即执行完此指令后，rax的值是(rsp+8)，即指向函数返回地址
+	leaq 112(%rdi),%rsp // 让栈顶指针指向第一个参数（当前协程的结构体）的regs[14]的位置，这就是libaco的作者所说的bug所在的地方，即让rsp没有指向栈顶。
 	pushq %rax
 	pushq %rbx
 	pushq %rcx
 	pushq %rdx
 
-	pushq -8(%rax) //ret func addr
+	pushq -8(%rax) //ret func addr 这是寄存器间接寻址，取%rax加上偏移-8作为操作数的地址。 即刚进该函数的时候，rsp指向的地址存储的就是函数的返回地址。
 
 	pushq %rsi
 	pushq %rdi
@@ -71,10 +72,10 @@ coctx_swap:
 	pushq %r12
 	pushq %r13
 	pushq %r14
-	pushq %r15
+	pushq %r15  // 寄存器入栈，即保存到当前协程的结构体中
 	
-	movq %rsi, %rsp
-	popq %r15
+	movq %rsi, %rsp // 让栈顶指针指向第二个参数（目标协程的结构体）
+	popq %r15 // 出栈，恢复目标协程保存的寄存器
 	popq %r14
 	popq %r13
 	popq %r12
@@ -83,13 +84,55 @@ coctx_swap:
 	popq %rbp
 	popq %rdi
 	popq %rsi
-	popq %rax //ret func addr
+	popq %rax //ret func addr 此时，rax里面的指针指向（保存返回地址的地方再低8字节）
 	popq %rdx
 	popq %rcx
 	popq %rbx
-	popq %rsp
-	pushq %rax
+	popq %rsp // 此时，rsp指向（保存函数返回地址的地方）
+	pushq %rax // 此时，rsp指向（保存函数返回地址的地方 - 8），本函数的返回地址即变为了
 	
-	xorl %eax, %eax
-	ret
+	xorl %eax, %eax // 把函数的返回值置0
+	ret // 从栈中取得返回地址，并跳转到该位置执行
+
+
+	// ****************************************************************
+	/*
+	movq %rsp,%rax  // 地址传送指令，将存储器操作数的地址保存到rax寄存器中。即执行完此指令后，rax的值是(rsp+8)，即指向函数返回地址
+    leaq 112(%rdi),%rsp // 让栈顶指针指向第一个参数（当前协程的结构体）的regs[14]的位置
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+
+    pushq (%rax) // 无关紧要
+
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15  // 寄存器入栈，即保存到当前协程的结构体中
+
+    movq %rsi, %rsp // 让栈顶指针指向第二个参数（目标协程的结构体）
+    popq %r15 // 出栈，恢复目标协程保存的寄存器
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r9
+    popq %r8
+    popq %rbp
+    popq %rdi
+    popq %rsi
+    popq %rax //ret func addr
+    popq %rdx
+    popq %rcx
+    popq %rbx
+    popq %rsp // 此时，rsp指向（保存函数返回地址的地方）
+
+    xorl %eax, %eax // 把函数的返回值置0
+    ret // 从栈中取得返回地址，并跳转到该位置执行
+    */
 #endif

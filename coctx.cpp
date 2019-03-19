@@ -112,19 +112,20 @@ int coctx_make( coctx_t *ctx,coctx_pfn_t pfn,const void *s,const void *s1 )
 	return 0;
 }
 #elif defined(__x86_64__)
+// 创建协程的上下文，把（栈顶-8）、协程函数地址、协程结构体地址存入协程结构体的ctx里面。
 int coctx_make( coctx_t *ctx,coctx_pfn_t pfn,const void *s,const void *s1 )
 {
 	char *sp = ctx->ss_sp + ctx->ss_size;
-	sp = (char*) ((unsigned long)sp & -16LL  );
+	sp = (char*) ((unsigned long)sp & -16LL  ); // sp如果不是16字节对齐，就减小sp，向下按16字节对齐
 
 	memset(ctx->regs, 0, sizeof(ctx->regs));
 
-	ctx->regs[ kRSP ] = sp - 8;
+	ctx->regs[ kRSP ] = sp - 8; //
 
 	ctx->regs[ kRETAddr] = (char*)pfn;
 
-	ctx->regs[ kRDI ] = (char*)s;
-	ctx->regs[ kRSI ] = (char*)s1;
+	ctx->regs[ kRDI ] = (char*)s; // 函数参数
+	ctx->regs[ kRSI ] = (char*)s1; // 函数参数
 	return 0;
 }
 

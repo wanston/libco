@@ -27,13 +27,13 @@ struct coctx_param_t
 };
 struct coctx_t
 {
-#if defined(__i386__)
+#if defined(__i386__) // x86
 	void *regs[ 8 ];
-#else
+#else // x64
 	void *regs[ 14 ];
 #endif
-	size_t ss_size;
-	char *ss_sp;
+	size_t ss_size; // 协程栈大小，和stStackMem_t::stack_size一致
+	char *ss_sp; // 协程栈指针，和stStackMem_t::stack_buffer一致，指向堆上空间
 	
 };
 

@@ -330,15 +330,15 @@ int close(int fd)
 }
 ssize_t read( int fd, void *buf, size_t nbyte )
 {
-	HOOK_SYS_FUNC( read );
+	HOOK_SYS_FUNC( read ); // 把系统函数read绑定到g_sys_read_func
 	
-	if( !co_is_enable_sys_hook() )
+	if( !co_is_enable_sys_hook() ) // 如果没有开启hook，就是系统调用read
 	{
 		return g_sys_read_func( fd,buf,nbyte );
 	}
-	rpchook_t *lp = get_by_fd( fd );
+	rpchook_t *lp = get_by_fd( fd ); // 得到rpchook_t的结构体，这个结构体应该是每个fd对应一个
 
-	if( !lp || ( O_NONBLOCK & lp->user_flag ) ) 
+	if( !lp || ( O_NONBLOCK & lp->user_flag ) ) // 如果fd是非阻塞类型，就使用系统调用read
 	{
 		ssize_t ret = g_sys_read_func( fd,buf,nbyte );
 		return ret;
@@ -574,11 +574,14 @@ ssize_t recv( int socket, void *buffer, size_t length, int flags )
 
 extern int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeout, poll_pfn_t pollfunc);
 
+/**
+ * 该函数在hook的read、write系统调用里面会使用，该函数调用的co_poll_inner中会涉及注册fd到epoll，然后切换协程
+ * **/
 int poll(struct pollfd fds[], nfds_t nfds, int timeout)
 {
 	HOOK_SYS_FUNC( poll );
 
-	if (!co_is_enable_sys_hook() || timeout == 0) {
+	if (!co_is_enable_sys_hook() || timeout == 0) { // 检查hook
 		return g_sys_poll_func(fds, nfds, timeout);
 	}
 	pollfd *fds_merge = NULL;
@@ -587,12 +590,13 @@ int poll(struct pollfd fds[], nfds_t nfds, int timeout)
 	std::map<int, int>::iterator it;
 	if (nfds > 1) {
 		fds_merge = (pollfd *)malloc(sizeof(pollfd) * nfds);
-		for (size_t i = 0; i < nfds; i++) {
-			if ((it = m.find(fds[i].fd)) == m.end()) {
+
+		for (size_t i = 0; i < nfds; i++) { // 遍历n个描述符
+			if ((it = m.find(fds[i].fd)) == m.end()) { // 如果未添加，就添加到数组中
 				fds_merge[nfds_merge] = fds[i];
-				m[fds[i].fd] = nfds_merge;
+				m[fds[i].fd] = nfds_merge; // m里是用来：快速地由fd找到目标fds_merge的索引，从而可以快速由fd找到pollfd结构体
 				nfds_merge++;
-			} else {
+			} else { // 如果添加了，就把新的events添上
 				int j = it->second;
 				fds_merge[j].events |= fds[i].events;  // merge in j slot
 			}
@@ -600,11 +604,11 @@ int poll(struct pollfd fds[], nfds_t nfds, int timeout)
 	}
 
 	int ret = 0;
-	if (nfds_merge == nfds || nfds == 1) {
+	if (nfds_merge == nfds || nfds == 1) { // 如果fds中没有重复的fd
 		ret = co_poll_inner(co_get_epoll_ct(), fds, nfds, timeout, g_sys_poll_func);
-	} else {
-		ret = co_poll_inner(co_get_epoll_ct(), fds_merge, nfds_merge, timeout,
-				g_sys_poll_func);
+	} else { // 如果fds中有重复的fd
+		ret = co_poll_inner(co_get_epoll_ct(), fds_merge, nfds_merge, timeout, g_sys_poll_func);
+		// 把fds_merge中的revents给到fds。
 		if (ret > 0) {
 			for (size_t i = 0; i < nfds; i++) {
 				it = m.find(fds[i].fd);
@@ -989,7 +993,7 @@ struct hostent *co_gethostbyname(const char *name)
 #endif
 
 
-void co_enable_hook_sys() //�⺯������������,�����ļ��ᱻ���ԣ�����
+void co_enable_hook_sys() //�⺯������������,�����ļ��ᱻ���ԣ�����
 {
 	stCoRoutine_t *co = GetCurrThreadCo();
 	if( co )

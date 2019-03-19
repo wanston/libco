@@ -30,14 +30,14 @@ struct stShareStack_t;
 
 struct stCoRoutineAttr_t
 {
-	int stack_size;
-	stShareStack_t*  share_stack;
+	int stack_size; // 栈大小，最小128KB，最大8MB，按4KB对齐
+	stShareStack_t*  share_stack; // 非NULL则表示使用共享栈空间，该空间由用户通过co_alloc_sharestack申请
 	stCoRoutineAttr_t()
 	{
 		stack_size = 128 * 1024;
 		share_stack = NULL;
 	}
-}__attribute__ ((packed));
+}__attribute__ ((packed)); // 取消字节对齐
 
 struct stCoEpoll_t;
 typedef int (*pfn_co_eventloop_t)(void *);

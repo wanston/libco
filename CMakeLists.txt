@@ -53,3 +53,5 @@ add_example_target(poll)
 add_example_target(setenv)
 add_example_target(specific)
 add_example_target(thread)
+add_example_target(learn)
+

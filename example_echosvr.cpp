@@ -48,7 +48,7 @@ struct task_t
 	int fd;
 };
 
-static stack<task_t*> g_readwrite;
+static stack<task_t*> g_readwrite; // 此容器存储的是空闲的任务，对应空闲的协程。
 static int g_listen_fd = -1;
 static int SetNonBlock(int iSock)
 {
@@ -72,7 +72,7 @@ static void *readwrite_routine( void *arg )
 	{
 		if( -1 == co->fd )
 		{
-			g_readwrite.push( co );
+			g_readwrite.push( co ); //
 			co_yield_ct();
 			continue;
 		}
@@ -80,7 +80,7 @@ static void *readwrite_routine( void *arg )
 		int fd = co->fd;
 		co->fd = -1;
 
-		for(;;)
+		for(;;) // 此循环内不断对某fd进行read write，co_poll应该会导致协程的切换
 		{
 			struct pollfd pf = { 0 };
 			pf.fd = fd;
