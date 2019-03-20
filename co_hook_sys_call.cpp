@@ -352,6 +352,8 @@ ssize_t read( int fd, void *buf, size_t nbyte )
 
 	int pollret = poll( &pf,1,timeout );
 
+	//fd可读或超时事件发生协程恢复进行读操作，此时虽然调用的是系统为hook的调用但fd已设置为非阻塞模式，所以这是
+	//一个异步读操作
 	ssize_t readret = g_sys_read_func( fd,(char*)buf ,nbyte );
 
 	if( readret < 0 )

@@ -549,6 +549,10 @@ void co_release( stCoRoutine_t *co )
 
 void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co);
 
+/**
+ * 恢复协程的执行，协程的调用栈的size会加一。
+ * 该函数肯定也是在某协程a中被调用的，协程a肯定是pCallStack最外层的协程，要恢复的协程co会添加到最外层
+ * **/
 void co_resume( stCoRoutine_t *co )
 {
 	stCoRoutineEnv_t *env = co->env;
@@ -563,6 +567,11 @@ void co_resume( stCoRoutine_t *co )
 
 
 }
+
+
+/**
+ * 从协程的调用栈中pop出最外层的协程，然后执行内层的协程
+ * **/
 void co_yield_env( stCoRoutineEnv_t *env )
 {
 	
@@ -747,12 +756,23 @@ stCoRoutineEnv_t *co_get_curr_thread_env()
 	return gCoEnvPerThread;
 }
 
+/**
+ * 该函数是stPoll_t的回调函数。在一次epoll_wait完成后，如果有活跃的fd，那么就执行该回调函数。
+ * 功能：
+ *      执行参数对应的协程
+ * **/
 void OnPollProcessEvent( stTimeoutItem_t * ap )
 {
 	stCoRoutine_t *co = (stCoRoutine_t*)ap->pArg;
 	co_resume( co );
 }
 
+/**
+ * 该函数是epoll_wait返回的活跃的fd的回调函数。在一次epoll_wait完成后，把活跃的fd的每个回调函数都执行一遍。
+ * 功能：
+ *      1. 把epoll_event转换成poll_event
+ *      2. 把stPoll_t添加到active链表中，co_eventloop中接下来会遍历active链表，执行每个结点的OnPollProcessEvent回调函数
+ * **/
 void OnPollPreparePfn( stTimeoutItem_t * ap,struct epoll_event &e,stTimeoutItemLink_t *active )
 {
 	stPollItem_t *lp = (stPollItem_t *)ap;
@@ -795,6 +815,7 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 
 		memset( timeout,0,sizeof(stTimeoutItemLink_t) ); //
 
+		// 遍历活跃的fd，执行pfnPrepare，然后把活跃的fd对应的stPoll_t添加到active链表中
 		for(int i=0;i<ret;i++)
 		{
 		    // ptr 指向co_epoll_in中的stPoll_t中对应的pPollItems[i]
@@ -808,7 +829,6 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 				AddTail( active,item );
 			}
 		}
-
 
 		unsigned long long now = GetTickMS();
 		// stCoEpoll_t中的stTimeout_t结构体存储了epoll监听的所有的描述符的超时信息
@@ -825,15 +845,15 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 
 		Join<stTimeoutItem_t,stTimeoutItemLink_t>( active,timeout );
 
-		// 遍历active链表，其中有因超时添进去的，也有因活跃添进去的。
+		// 遍历active链表，其中有因超时添进去的，也有因活跃添进去的。每个元素对应一个stPoll_t
 		lp = active->head;
 		while( lp )
 		{
 
 			PopHead<stTimeoutItem_t,stTimeoutItemLink_t>( active );
-            if (lp->bTimeout && now < lp->ullExpireTime) // 超时，并且
+            if (lp->bTimeout && now < lp->ullExpireTime) // 把标记为超时，但是并没有真正超时的节点放回pTimeout
 			{
-				int ret = AddTimeout(ctx->pTimeout, lp, now); // 把在active链表中，但是标记为超时，并没有真正超时的节点重新放回pTimeout
+				int ret = AddTimeout(ctx->pTimeout, lp, now);
 				if (!ret) // 放回成功
 				{
 					lp->bTimeout = false;
@@ -843,7 +863,7 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 			}
 			if( lp->pfnProcess )
 			{
-				lp->pfnProcess( lp );
+				lp->pfnProcess( lp ); // 切换到活跃的fd对应的协程
 			}
 
 			lp = active->head;
