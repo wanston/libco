@@ -16,6 +16,10 @@
 * limitations under the License.
 */
 
+/*
+ * 该文件演示的是协程局部变量的使用。
+ * */
+
 #include "co_routine_specific.h"
 #include "co_routine.h"
 #include <unistd.h>

@@ -52,7 +52,7 @@ struct stCoRoutineEnv_t
 {
 	stCoRoutine_t *pCallStack[ 128 ]; // 协程调用栈（最多128个协程，每个线程拥有一个）
 	int iCallStackSize; // 栈中当前的协程数
-	stCoEpoll_t *pEpoll;
+	stCoEpoll_t *pEpoll; // 一个线程有一个epoll
 
 	//for copy stack log lastco and nextco
 	stCoRoutine_t* pending_co; //调用co_swap时，用于记录待恢复的协程
@@ -315,15 +315,15 @@ struct stTimeoutItem_t;
 struct stCoEpoll_t
 {
 	int iEpollFd;
-	static const int _EPOLL_SIZE = 1024 * 10;
+	static const int _EPOLL_SIZE = 1024 * 10; // 表示epoll_creat的参数size，也监听fd的最大数目
 
-	struct stTimeout_t *pTimeout;
+	struct stTimeout_t *pTimeout; // 用于管理超时事件。（每一次调用带timeout的co_poll_inner，都会把stPoll_t添加到该结构体中）
 
-	struct stTimeoutItemLink_t *pstTimeoutList;
+	struct stTimeoutItemLink_t *pstTimeoutList; // 只在co_eventloop中使用，用于保存超时的stTimeoutItem_t
 
-	struct stTimeoutItemLink_t *pstActiveList;
+	struct stTimeoutItemLink_t *pstActiveList;  // 只在co_eventloop中使用，用于保存需要执行回调pfnProcess的stTimeoutItem_t
 
-	co_epoll_res *result; // 该结构体用于存储epoll_wait的结果
+	co_epoll_res *result; // 作为epoll_wait的events参数使用，来存储epoll_wait的结果
 
 };
 typedef void (*OnPreparePfn_t)( stTimeoutItem_t *,struct epoll_event &ev, stTimeoutItemLink_t *active );
@@ -355,11 +355,15 @@ struct stTimeoutItemLink_t
 };
 struct stTimeout_t
 {
-	stTimeoutItemLink_t *pItems; // 指向数组，每个元素是一个链表，每个链表存储超时时间相同的stTimeoutItem_t
-	int iItemSize; // 表示数组的大小，在AllocTimeout函数中设为60*1000
+	stTimeoutItemLink_t *pItems; // 指向数组，每个元素是一个链表，链表的节点是stTimeoutItem_t。不同的链表代表不同的超时时刻。
+	int iItemSize; // 表示数组的大小，在AllocTimeout函数中设为60*1000，意味着超时时间最多为60*1000ms。
 
-	unsigned long long ullStart; // 一个时刻单位毫秒，用途？
-	long long llStartIdx;
+	unsigned long long ullStart; // 一个时刻，单位毫秒。用于计算pItems中链表的超时时刻。
+	long long llStartIdx; // 用于计算pItems中链表的超时时刻。
+
+	// pItems中链表的超时时刻计算方式：
+	// 如果链表在数组pItems中的索引为idx，那么超时时刻 = (idx - llStartIdx + iItemSize) % iItemSize + ullStart，单位是ms。
+	// 在TakeAllTimeout函数中，会对ullStart和llStartIdx进行更新。
 };
 stTimeout_t *AllocTimeout( int iSize )
 {
@@ -414,6 +418,8 @@ int AddTimeout( stTimeout_t *apTimeout,stTimeoutItem_t *apItem ,unsigned long lo
 
 	return 0;
 }
+
+// 取走apTimeout中的所有超时的链表，存到apResult中，然后更新apTimeout的某些成员
 inline void TakeAllTimeout( stTimeout_t *apTimeout,unsigned long long allNow,stTimeoutItemLink_t *apResult )
 {
 	if( apTimeout->ullStart == 0 )
@@ -675,22 +681,24 @@ void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co)
 // { fd,events,revents }
 struct stPollItem_t ;
 
-// co_poll_inner 中使用的结构体
+// co_poll_inner 中使用的结构体，用来表示一次poll操作
 struct stPoll_t : public stTimeoutItem_t 
 {
-	struct pollfd *fds; // 指向数组
-	nfds_t nfds; // 表示fds的长度，typedef unsigned long int nfds_t;
+	struct pollfd *fds;
+	nfds_t nfds; // fds的长度，typedef unsigned long int nfds_t;
 
-	stPollItem_t *pPollItems; // 指向数组，长度同样是nfds，其中保存有events。同时stPollItem_t也是链表的node
+	stPollItem_t *pPollItems; // 指向指针数组，长度同样是nfds。用于保存每个fd的events以及回调函数
 
-	int iAllEventDetach; //
+	int iAllEventDetach; // 表示是否有fd变为ready
 
-	int iEpollFd;
+	int iEpollFd; // 关联的epollfd
 
-	int iRaiseCnt;
+	int iRaiseCnt; // 用于存储这次poll操作的应返回的结果，即poll的返回值
 
 
 };
+
+// 我个人认为这个继承没有必要
 struct stPollItem_t : public stTimeoutItem_t
 {
 	struct pollfd *pSelf; // 指向
@@ -842,7 +850,7 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
 			lp->bTimeout = true;
 			lp = lp->pNext;
 		}
-
+        // 把timeout链表合并到active链表上
 		Join<stTimeoutItem_t,stTimeoutItemLink_t>( active,timeout );
 
 		// 遍历active链表，其中有因超时添进去的，也有因活跃添进去的。每个元素对应一个stPoll_t
@@ -929,7 +937,12 @@ typedef int (*poll_pfn_t)(struct pollfd fds[], nfds_t nfds, int timeout);
 
 
 /**
- * 在hook的poll中会调用
+ * 在hook的poll中被调用，其主要的作用是：
+ *      把fd events 等信息保存到stPoll_t结构体中，stPoll_t本身也是stTimeoutItem_t的子类，stPoll_t的回调函数是OnPollProcessEvent。
+ *      把stPoll_t中的fd和events添加到epoll中，并且利用events.data.ptr指定fd的回调函数
+ *      把stPoll_t添加到stCoEpoll_t的pTimeout中。
+ *      调用co_yield_env切换协程
+ *      清理工作 和 return
  * **/
 int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeout, poll_pfn_t pollfunc)
 {

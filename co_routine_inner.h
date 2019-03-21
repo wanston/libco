@@ -56,7 +56,7 @@ struct stCoRoutine_t
 	char cStart; // 是否已经开始执行协程函数
 	char cEnd; // 是否已经结束执行协程函数
 	char cIsMain; // 是否为主协程
-	char cEnableSysHook;
+	char cEnableSysHook; // 是否允许hook系统调用
 	char cIsShareStack;
 
 	void *pvEnv;

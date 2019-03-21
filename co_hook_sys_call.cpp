@@ -48,20 +48,23 @@
 
 typedef long long ll64_t;
 
+// 每个fd对应一个rpchook_t结构体
 struct rpchook_t
 {
 	int user_flag;
 	struct sockaddr_in dest; //maybe sockaddr_un;
 	int domain; //AF_LOCAL , AF_INET
 
-	struct timeval read_timeout;
-	struct timeval write_timeout;
+	struct timeval read_timeout; // 在该文件描述符上调用read允许的timeout
+	struct timeval write_timeout; // 在该文件描述符上调用write允许的timeout
 };
 static inline pid_t GetPid()
 {
 	char **p = (char**)pthread_self();
 	return p ? *(pid_t*)(p + 18) : getpid();
 }
+
+// 在co_accept函数和socket函数中，为每个新产生的文件描述符分配一个rpchook_t结构体。
 static rpchook_t *g_rpchook_socket_fd[ 102400 ] = { 0 };
 
 typedef int (*socket_pfn_t)(int domain, int type, int protocol);
