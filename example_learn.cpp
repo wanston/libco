@@ -27,8 +27,8 @@ static stCoRoutine_t *coa,*cob, *coc;
 
 static void* A(void *arg) {
     printf("1 ");
-//    co_yield_ct();  // 切出到主协程
-    co_resume(cob);
+    co_yield_ct();  // 切出到主协程
+//    co_resume(cob);
     printf("2 ");
 }
 
@@ -55,9 +55,11 @@ static void* C(void *arg) {
 
 int main(void) {
     co_create(&coa,NULL,A,NULL);// 创建了主协程，和A协程，其都有上下文和栈空间，现在仍然处于正常的运行栈内
-    co_create(&cob,NULL,B,NULL);
+//    co_create(&cob,NULL,B,NULL);
 //    co_create(&coc,NULL,C,NULL);
     co_resume(coa);
+    co_resume(coa);
+//    co_resume(coa);
 //    co_resume(coa);
 //    co_resume(cob);
 //    co_resume(coc);

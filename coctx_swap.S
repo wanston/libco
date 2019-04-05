@@ -41,7 +41,7 @@ coctx_swap:
 	movl 4(%eax), %esp //parm b -> &regs[0]
 
 	popl %eax  //ret func addr
-	popl %ebx  
+	popl %ebx  # s
 	popl %ecx
 	popl %edx
 	popl %edi
@@ -88,7 +88,7 @@ coctx_swap:
 	popq %rdx
 	popq %rcx
 	popq %rbx
-	popq %rsp // 此时，rsp指向（保存函数返回地址的地方）
+	popq %rsp // 此时，rsp指向（保存函数返回地址的地方）.
 	pushq %rax // 此时，rsp指向（保存函数返回地址的地方 - 8），本函数的返回地址即变为了
 	
 	xorl %eax, %eax // 把函数的返回值置0

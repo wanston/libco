@@ -120,7 +120,9 @@ int coctx_make( coctx_t *ctx,coctx_pfn_t pfn,const void *s,const void *s1 )
 
 	memset(ctx->regs, 0, sizeof(ctx->regs));
 
-	ctx->regs[ kRSP ] = sp - 8; //
+	ctx->regs[ kRSP ] = sp - 8; // 这里这样做是因为，需要留出sizeof(void*)的空间来存放retaddr。
+
+//	ctx->regs[ kRSP ] = sp - 8; //
 
 	ctx->regs[ kRETAddr] = (char*)pfn;
 
